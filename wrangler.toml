@@ -1,0 +1,17 @@
+name = "mcp-gdrive-cf"
+main = "src/index.ts"
+compatibility_date = "2025-01-20"
+compatibility_flags = ["nodejs_compat"]
+
+# KV namespace for storing user tokens
+[[kv_namespaces]]
+binding = "KV_TOKENS"
+id = "151468f26d974c478a360660da60178f"
+
+# Environment variables (non-secret)
+[vars]
+GOOGLE_CLIENT_ID = "35382543229-3t68i7uuplhpbo3mc1besi2r7fjgbc08.apps.googleusercontent.com"
+
+# Secrets (set via: wrangler secret put SECRET_NAME)
+# - GOOGLE_CLIENT_SECRET
+# - SESSION_SECRET (for signing session cookies)

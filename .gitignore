@@ -1,0 +1,101 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+.wrangler/
+worker/
+
+# Environment files
+.env
+.env.local
+.dev.vars
+.env.production
+
+# Cloudflare secrets and tokens
+.cloudflare/
+wrangler.toml.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.npm
+.eslintcache
+.pnpm-debug.log*
+
+# Wrangler logs
+.wrangler-logs/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+.project
+.classpath
+.settings/
+.vs/
+
+# Test coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Generated documentation
+docs/_build/
+
+# MacOS
+**/.DS_Store
+
+# Windows
+desktop.ini
+
+# Linux
+.directory
+
+# Editor backups
+*~
+\#*\#
+.#*
+
+# Python (if using any Python tools)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+ENV/
+
+# Secrets and sensitive data
+*.pem
+*.key
+*.cert
+*.crt
+secrets.json
+credentials.json
+
+# Local development notes
+NOTES.md
+TODO.local.md
+scratch.md
