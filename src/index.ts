@@ -6,6 +6,11 @@
 import { Env } from './bindings';
 import { handleMcpRequest } from './mcp';
 import { handleGoogleAuthorize, handleGoogleCallback } from './auth-google';
+import {
+  handleClientRegistration,
+  handleAuthorize,
+  handleToken,
+} from './oauth-client';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -45,18 +50,43 @@ export default {
         return await handleGoogleCallback(request, env);
       }
 
-      // Route: Client OAuth endpoints (optional, for future implementation)
-      if (path === '/token') {
-        return new Response(
-          JSON.stringify({ error: 'Client OAuth not yet implemented' }),
-          { status: 501, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      // Route: OAuth client registration (dynamic client registration)
+      if (path === '/oauth/register' || path === '/register') {
+        if (request.method !== 'POST') {
+          return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
+        }
+        return await handleClientRegistration(request, env);
       }
 
-      if (path === '/register') {
+      // Route: OAuth authorization endpoint
+      if (path === '/oauth/authorize') {
+        return await handleAuthorize(request, env);
+      }
+
+      // Route: OAuth token endpoint
+      if (path === '/oauth/token' || path === '/token') {
+        if (request.method !== 'POST') {
+          return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
+        }
+        return await handleToken(request, env);
+      }
+
+      // Route: OAuth discovery (RFC 8414)
+      if (path === '/.well-known/oauth-authorization-server') {
+        const baseUrl = new URL(request.url).origin;
         return new Response(
-          JSON.stringify({ error: 'Dynamic client registration not yet implemented' }),
-          { status: 501, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          JSON.stringify({
+            issuer: baseUrl,
+            authorization_endpoint: `${baseUrl}/oauth/authorize`,
+            token_endpoint: `${baseUrl}/oauth/token`,
+            registration_endpoint: `${baseUrl}/oauth/register`,
+            response_types_supported: ['code'],
+            grant_types_supported: ['authorization_code'],
+            token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+            code_challenge_methods_supported: ['S256', 'plain'],
+            scopes_supported: ['openid'],
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
@@ -65,12 +95,18 @@ export default {
         return new Response(
           JSON.stringify({
             name: 'mcp-gdrive-cf',
-            version: '0.1.0',
+            version: '0.4.0',
             endpoints: {
               sse: '/sse',
-              authorize: '/google/authorize',
-              callback: '/google/callback',
+              google_authorize: '/google/authorize',
+              google_callback: '/google/callback',
+              oauth_register: '/oauth/register',
+              oauth_authorize: '/oauth/authorize',
+              oauth_token: '/oauth/token',
+              oauth_discovery: '/.well-known/oauth-authorization-server',
             },
+            tools: 11,
+            features: ['google_drive', 'google_sheets', 'oauth_clients'],
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );

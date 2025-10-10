@@ -1,343 +1,332 @@
 # mcp-gdrive-cf
 
-Remote MCP server for Google Drive and Sheets running on Cloudflare Workers.
+Remote MCP server for Google Drive and Sheets running on Cloudflare Workers with full OAuth 2.0 support.
 
-Adapted from [isaacphi/mcp-gdrive](https://github.com/isaacphi/mcp-gdrive) to run as a remote HTTP/SSE MCP server on Cloudflare's edge network.
+**Production Ready** ✅ | **11 Tools** | **OAuth 2.0** | **PKCE** | **Global Edge Network**
 
-## Quick Start
+Adapted from [isaacphi/mcp-gdrive](https://github.com/isaacphi/mcp-gdrive) to run as a remote HTTP/SSE MCP server on Cloudflare's edge network with complete OAuth 2.0 authorization server capabilities.
 
-```bash
+---
+
+## 🚀 Quick Start
+
+\`\`\`bash
 # 1. Clone and install
-git clone https://github.com/yourusername/mcp-gdrive-cf.git
+git clone https://github.com/brianmoney/mcp-gdrive-cf.git
 cd mcp-gdrive-cf
 npm install
 
-# 2. Create KV namespace and configure secrets
+# 2. Create KV namespaces
 wrangler kv:namespace create KV_TOKENS
+wrangler kv:namespace create KV_CLIENTS
+
+# 3. Update wrangler.toml with your namespace IDs
+
+# 4. Configure Google OAuth credentials
 wrangler secret put GOOGLE_CLIENT_SECRET
 
-# 3. Deploy
+# 5. Deploy
 wrangler deploy
 
-# 4. Authenticate
-# Visit https://your-worker.workers.dev/google/authorize
-# Copy your session ID
+# 6. Test with MCP Inspector
+npx @modelcontextprotocol/inspector https://your-worker.workers.dev/sse
+\`\`\`
 
-# 5. Use in VS Code
-# Add to .vscode/mcp.json:
-# {
-#   "servers": {
-#     "gdrive": {
-#       "url": "https://your-worker.workers.dev/sse?session=YOUR_SESSION_ID",
-#       "type": "http"
-#     }
-#   }
-# }
-```
+---
 
-## Features
+## ✨ Features
 
-- 🔍 **gdrive_search** - Search for files in Google Drive
-- 📄 **gdrive_read_file** - Read content from Drive files (with export for Docs/Sheets/Slides)
-- 📊 **gsheets_read** - Read data from Google Sheets
-- ✏️ **gsheets_update_cell** - Update cell values in Sheets
-- ☁️ **Remote Access** - Works from any MCP client over HTTP/SSE
-- 🔐 **Secure** - OAuth 2.0 with automatic token refresh
-- ⚡ **Fast** - Runs on Cloudflare's global edge network
+### Drive Operations
+- 🔍 **Search** - Basic and advanced search with filters (MIME type, owner, dates, shared drives)
+- 📄 **Read** - Read any file with 22+ export formats (PDF, DOCX, XLSX, Markdown, etc.)
+- 📁 **Create Folders** - Organize files with nested folder structures
+- ⬆️ **Upload** - Upload files up to 5MB
+- 🗑️ **Delete** - Move files to trash
+- 📦 **Move** - Reorganize files between folders
+- 🔐 **Share** - Add permissions (reader, writer, commenter, owner)
 
-## Architecture
+### Sheets Operations
+- 📊 **Read** - Batch read multiple ranges
+- ✏️ **Update** - Update individual cells
+- ➕ **Append** - Add rows to spreadsheets
 
-- **Runtime**: Cloudflare Workers
-- **Transport**: Server-Sent Events (SSE) at `/sse`
-- **Auth**: Google OAuth 2.0 (tokens stored in Workers KV)
-- **APIs**: Direct fetch to Google Drive v3 and Sheets v4 REST APIs
+### Infrastructure
+- ☁️ **Global Edge Network** - Runs on Cloudflare Workers worldwide
+- 🔐 **OAuth 2.0 Server** - Full authorization server with PKCE support
+- 🔑 **Dynamic Client Registration** - Automatic client onboarding
+- 🔄 **Auto Token Refresh** - Seamless Google token renewal
+- 📡 **SSE Transport** - Real-time Server-Sent Events
+- 🛡️ **Secure** - HTTPS only, encrypted token storage
 
-## Prerequisites
+---
 
-1. **Cloudflare Account** with Workers enabled
-2. **Google Cloud Project** with:
-   - Drive API enabled
-   - Sheets API enabled
-   - OAuth 2.0 credentials (Web application type)
-3. **Node.js** LTS and **wrangler** CLI
+## 🎯 What Makes This Different
 
-## Setup
+Unlike the original STDIO-based \`mcp-gdrive\`, this implementation:
+
+1. **Runs remotely** on Cloudflare Workers (no local process)
+2. **Full OAuth 2.0** authorization server (not just OAuth client)
+3. **Multi-client support** via dynamic client registration
+4. **PKCE security** for public clients
+5. **22+ export formats** for Drive files
+6. **Write operations** (create, delete, move, share, upload)
+7. **Production tested** with real workloads
+
+---
+
+## 📋 Prerequisites
+
+### Required
+- **Cloudflare Account** with Workers enabled (free tier works)
+- **Google Cloud Project** with Drive API and Sheets API enabled
+- **Node.js** LTS (v18+)
+- **Wrangler CLI** (\`npm install -g wrangler\`)
+
+### Google Cloud Setup
+
+1. Create a project at [Google Cloud Console](https://console.cloud.google.com/)
+2. Enable APIs:
+   - Google Drive API
+   - Google Sheets API
+3. Create OAuth 2.0 credentials:
+   - Type: **Web application**
+   - Redirect URIs: \`https://your-worker.workers.dev/google/callback\`
+4. Required OAuth scopes:
+   - \`https://www.googleapis.com/auth/drive\`
+   - \`https://www.googleapis.com/auth/spreadsheets\`
+
+---
+
+## 🔧 Installation & Deployment
 
 ### 1. Install Dependencies
 
-```bash
+\`\`\`bash
 npm install
-```
+\`\`\`
 
-### 2. Create KV Namespace
+### 2. Create KV Namespaces
 
-```bash
+\`\`\`bash
+# For user session tokens
 wrangler kv:namespace create KV_TOKENS
-```
 
-Update `wrangler.toml` with the namespace ID returned.
+# For OAuth client registrations
+wrangler kv:namespace create KV_CLIENTS
+\`\`\`
 
-### 3. Configure Google OAuth
+Copy the namespace IDs to \`wrangler.toml\`:
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select an existing one
-3. Enable the following APIs:
-   - Google Drive API
-   - Google Sheets API
-4. Go to **Credentials** → **Create Credentials** → **OAuth client ID**
-5. Choose **Web application** as the application type
-6. Add authorized redirect URIs:
-   - Development: `http://localhost:8788/google/callback`
-   - Production: `https://<your-worker>.workers.dev/google/callback`
-7. Note your **Client ID** and **Client Secret**
-8. Set the client ID in `wrangler.toml` under `[vars]`
-9. Set the client secret:
+\`\`\`toml
+[[kv_namespaces]]
+binding = "KV_TOKENS"
+id = "your-tokens-namespace-id"
 
-```bash
-wrangler secret put GOOGLE_CLIENT_SECRET
-```
+[[kv_namespaces]]
+binding = "KV_CLIENTS"
+id = "your-clients-namespace-id"
+\`\`\`
 
-**Required OAuth Scopes:**
-- `https://www.googleapis.com/auth/drive.readonly` - Read Drive files
-- `https://www.googleapis.com/auth/spreadsheets` - Read/write Sheets
+### 3. Configure Environment Variables
 
-### 4. Set Environment Variables
+Add to \`wrangler.toml\`:
 
-Add to `wrangler.toml`:
-
-```toml
+\`\`\`toml
 [vars]
 GOOGLE_CLIENT_ID = "your-client-id.apps.googleusercontent.com"
-```
+\`\`\`
 
-## Development
+Set secrets:
 
-### Local Development
+\`\`\`bash
+# Google OAuth client secret
+wrangler secret put GOOGLE_CLIENT_SECRET
+\`\`\`
 
-```bash
-npm start
-# or
-wrangler dev
-```
+### 4. Deploy
 
-The server will be available at `http://localhost:8788`
-
-### Testing with MCP Inspector
-
-```bash
-npx @modelcontextprotocol/inspector http://localhost:8788/sse?session=YOUR_SESSION_ID
-```
-
-### Authenticate with Google
-
-1. Visit `http://localhost:8788/google/authorize` (or your deployed worker URL)
-2. Sign in with your Google account and grant permissions
-3. You'll be redirected to a success page showing your **session ID**
-4. Copy the session ID and add it to your MCP client configuration
-
-**Note:** The session ID is like an API key - keep it secure and don't share it publicly.
-
-## Deployment
-
-```bash
-npm run deploy
-# or
+\`\`\`bash
 wrangler deploy
-```
+\`\`\`
 
-## Usage with MCP Clients
+Your worker will be available at: \`https://your-worker-name.your-account.workers.dev\`
 
-### VS Code (Direct HTTP Connection)
+---
 
-Create or edit `.vscode/mcp.json` in your workspace:
+## 🔐 OAuth 2.0 Flow
 
-```json
+This server implements a **complete OAuth 2.0 authorization server** per the MCP specification.
+
+### Using MCP Inspector
+
+The easiest way to test the OAuth flow:
+
+\`\`\`bash
+npx @modelcontextprotocol/inspector https://your-worker.workers.dev/sse
+\`\`\`
+
+1. **Discovery** - Inspector auto-discovers OAuth endpoints
+2. **Registration** - Click "Guided Setup" → registers client automatically
+3. **Authorization** - Redirects to Google → authenticates → redirects back
+4. **Token Exchange** - Automatically exchanges code for access token
+5. **Use Tools** - All 11 tools now available!
+
+### Security Features
+
+- ✅ **PKCE (RFC 7636)** - Proof Key for Code Exchange
+- ✅ **State Parameter** - CSRF protection
+- ✅ **HTTPS Only** - Enforced by Cloudflare Workers
+- ✅ **Secure Token Storage** - Encrypted in Workers KV
+- ✅ **Token Expiration** - Access tokens expire in 1 hour
+- ✅ **Client Secret Hashing** - SHA-256 hashed storage
+- ✅ **Authorization Code Single-Use** - Codes deleted after exchange
+
+---
+
+## 🛠️ Available Tools
+
+### Drive Tools
+
+- \`gdrive_search\` - Basic search across all files
+- \`gdrive_search_advanced\` - Advanced search with filters
+- \`gdrive_read_file\` - Read files with 22+ export formats
+- \`gdrive_create_folder\` - Create folders
+- \`gdrive_upload_file\` - Upload files (up to 5MB)
+- \`gdrive_delete_file\` - Move files to trash
+- \`gdrive_move_file\` - Move files between folders
+- \`gdrive_add_permission\` - Share files/folders
+
+### Sheets Tools
+
+- \`gsheets_read\` - Read multiple ranges
+- \`gsheets_update_cell\` - Update single cells
+- \`gsheets_append_row\` - Append rows
+
+---
+
+## 🔌 Client Configuration
+
+### VS Code with MCP Extension
+
+Create \`.vscode/settings.json\`:
+
+\`\`\`json
 {
-  "servers": {
+  "mcp.servers": {
     "gdrive": {
-      "url": "https://<your-worker>.workers.dev/sse?session=YOUR_SESSION_ID",
-      "type": "http"
+      "url": "https://your-worker.workers.dev/sse",
+      "authorization": {
+        "type": "oauth2"
+      }
     }
   }
 }
-```
+\`\`\`
 
-### Claude Desktop / Cline (Via mcp-remote Bridge)
+### Claude Desktop / Cline
 
-Edit your MCP settings file:
+**macOS/Linux:** \`~/Library/Application Support/Claude/claude_desktop_config.json\`  
+**Windows:** \`%APPDATA%\\Claude\\claude_desktop_config.json\`
 
-**macOS/Linux:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
+\`\`\`json
 {
   "mcpServers": {
     "gdrive": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://<your-worker>.workers.dev/sse?session=YOUR_SESSION_ID"]
+      "url": "https://your-worker.workers.dev/sse"
     }
   }
 }
-```
+\`\`\`
 
-### Direct Connection (Remote MCP capable clients)
+---
 
-For clients that support HTTP/SSE transport directly, configure them to connect to:
+## 🧪 Testing
 
-```
-https://<your-worker>.workers.dev/sse?session=YOUR_SESSION_ID
-```
+### Local Development
 
-## API Endpoints
+\`\`\`bash
+npm start
+# Server available at http://localhost:8788
+\`\`\`
 
-- `GET /` - Health check / server info
-- `GET /sse` - MCP SSE endpoint (Streamable HTTP transport)
-- `POST /sse` - Send MCP JSON-RPC messages
-- `POST /message` - Alternative message endpoint (for SSE+POST pattern)
-- `GET /google/authorize` - Start Google OAuth flow
-- `GET /google/callback` - OAuth callback handler (receives OAuth code)
+### Test with MCP Inspector
 
-## Project Structure
+\`\`\`bash
+npx @modelcontextprotocol/inspector http://localhost:8788/sse
+\`\`\`
 
-```
-/src
-  index.ts          # Main worker entry point, HTTP routing
-  mcp.ts            # MCP protocol implementation (SSE + JSON-RPC)
-  google.ts         # Google Drive/Sheets API helpers
-  auth-google.ts    # OAuth 2.0 flow (authorize, callback, refresh)
-  storage.ts        # KV storage helpers for user tokens
-  bindings.d.ts     # TypeScript definitions for Cloudflare bindings
-wrangler.toml       # Cloudflare Workers configuration
-package.json        # Dependencies and scripts
-tsconfig.json       # TypeScript configuration
-```
+### Check CloudFlare Logs
 
-## Tool Reference
+\`\`\`bash
+wrangler tail --format pretty
+\`\`\`
 
-### gdrive_search
+---
 
-Search for files in Google Drive.
+## 🐛 Troubleshooting
 
-**Parameters:**
-- `query` (string, required) - Search query (e.g., `"name contains 'report'"`)
-- `pageSize` (number) - Results per page (default: 100, max: 1000)
-- `pageToken` (string) - Pagination token
+### "Failed to discover OAuth metadata"
 
-### gdrive_read_file
+**Solution:**
+- Ensure \`/.well-known/oauth-authorization-server\` returns valid JSON
+- Check CORS headers are present
+- Verify latest version is deployed: \`wrangler deploy\`
 
-Read content from a Google Drive file.
+### "Token exchange failed: HTTP 400"
 
-**Parameters:**
-- `fileId` (string, required) - Google Drive file ID
-- `mimeType` (string) - Export MIME type for Google Docs/Sheets/Slides
+**Solutions:**
+- Check code_verifier matches original code_challenge
+- Ensure redirect_uri exactly matches registration
+- Verify client credentials are correct
+- Check CloudFlare logs: \`wrangler tail\`
 
-### gsheets_read
+### Tools not working
 
-Read data from Google Sheets.
+**Solutions:**
+- Check Google OAuth scopes include \`drive\` and \`spreadsheets\`
+- Re-authenticate if scopes changed: visit \`/google/authorize\`
+- Verify Worker has valid Google access token
+- Check KV namespace bindings in \`wrangler.toml\`
 
-**Parameters:**
-- `spreadsheetId` (string, required) - Spreadsheet ID
-- `ranges` (array, required) - Array of A1 notation ranges
+---
 
-### gsheets_update_cell
+## 📊 Performance & Limits
 
-Update a cell in Google Sheets.
+| Resource | Limit | Notes |
+|----------|-------|-------|
+| **Request Timeout** | 30 seconds | CloudFlare Workers limit |
+| **File Upload** | 5 MB | Simple upload API limit |
+| **File Export** | 10 MB | Google Drive export limit |
+| **Token Storage** | 30 days | Automatic cleanup |
+| **Authorization Code** | 10 minutes | Single-use |
+| **Access Token** | 1 hour | Auto-refreshed |
 
-**Parameters:**
-- `spreadsheetId` (string, required) - Spreadsheet ID
-- `range` (string, required) - A1 notation range
-- `value` (string, required) - Value to write
+---
 
-## Troubleshooting
+## 🔒 Security Best Practices
 
-### "Waiting for server to respond to `initialize` request"
+1. **Never commit secrets** - Use \`wrangler secret put\`
+2. **Rotate client secrets** - Periodically regenerate OAuth credentials
+3. **Monitor access** - Use CloudFlare Analytics to track usage
+4. **Limit OAuth scopes** - Only request necessary Google permissions
+5. **Use PKCE** - Always use PKCE for public clients
+6. **Validate redirect URIs** - Whitelist exact URIs in Google Console
+7. **Enable 2FA** - Protect your CloudFlare and Google accounts
 
-This usually means the MCP client can't connect to the server. Check:
-- Is the worker URL correct in your MCP configuration?
-- Did you deploy the latest version? (`wrangler deploy`)
-- Does your session ID exist and have valid tokens?
-- Try accessing the health endpoint: `https://<worker>/` (should return JSON)
+---
 
-### "Unauthorized" or "Missing session identifier"
+## 📄 License
 
-Your session ID is missing or invalid:
-- Make sure you've completed the OAuth flow at `/google/authorize`
-- Check that your session ID is included in the URL: `?session=YOUR_SESSION_ID`
-- Sessions expire after 30 days - re-authenticate if needed
+MIT License
 
-### "Not authenticated with Google"
+---
 
-Your Google OAuth tokens are missing or expired:
-1. Re-authenticate at `https://<worker>/google/authorize`
-2. Get a new session ID
-3. Update your MCP client configuration
+## 🙏 Acknowledgments
 
-### "Sheets API error: 400 Bad Request"
+- [isaacphi/mcp-gdrive](https://github.com/isaacphi/mcp-gdrive) - Original STDIO implementation
+- [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
+- [CloudFlare Workers](https://workers.cloudflare.com/) - Serverless platform
 
-When updating cells, make sure:
-- The range format is correct (e.g., `A1`, `Sheet1!B2:C5`)
-- You have write permissions to the spreadsheet
-- The spreadsheet ID is valid
+---
 
-### Testing the Worker Directly
-
-Test the initialize request with curl:
-
-```bash
-curl -X POST "https://<worker>/sse?session=YOUR_SESSION_ID" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
-```
-
-Expected response:
-```json
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"mcp-gdrive-cf","version":"0.1.0"}}}
-```
-
-## Contributing
-
-Contributions are welcome! This project follows the MCP specification for remote servers.
-
-## Related Projects
-
-- [MCP Specification](https://modelcontextprotocol.io) - Model Context Protocol documentation
-- [mcp-gdrive](https://github.com/isaacphi/mcp-gdrive) - Original STDIO-based MCP server
-- [Cloudflare Workers](https://workers.cloudflare.com/) - Serverless execution environment
-
-## OAuth Session Duration
-
-**Session Cookie:** 30 days
-- The session cookie that identifies your MCP client expires after 30 days
-
-**Token Storage:** 30 days
-- OAuth tokens are stored in Cloudflare KV with a 30-day TTL
-- After 30 days, you'll need to re-authenticate by visiting `/google/authorize`
-
-**Access Token:** ~1 hour
-- Google access tokens expire every hour
-- **Automatically refreshed** using the refresh token (no user action required)
-
-**Refresh Token:** Indefinite (until revoked)
-- Obtained during OAuth with `access_type: offline`
-- Allows automatic access token renewal for the duration of the session
-
-To re-authenticate after 30 days:
-1. Visit `https://<your-worker>.workers.dev/google/authorize`
-2. Complete the OAuth flow
-3. Update your MCP client configuration with the new session ID
-
-## Security
-
-- OAuth tokens stored in KV with 30-day TTL
-- Automatic access token refresh every hour
-- HTTPS only in production (enforced by Cloudflare Workers)
-- CSRF protection via state parameter in OAuth flow
-- Minimal OAuth scopes:
-  - `https://www.googleapis.com/auth/drive.readonly` - Read-only Drive access
-  - `https://www.googleapis.com/auth/spreadsheets` - Read/write Sheets access
-- Session-based authentication using secure HTTP-only cookies
-- No token data exposed to client
-
-## License
-
-MIT
+**Made with ☁️ by [Brian Money](https://github.com/brianmoney)**

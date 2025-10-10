@@ -8,6 +8,11 @@ compatibility_flags = ["nodejs_compat"]
 binding = "KV_TOKENS"
 id = "151468f26d974c478a360660da60178f"
 
+# KV namespace for storing OAuth client registrations
+[[kv_namespaces]]
+binding = "KV_CLIENTS"
+id = "151468f26d974c478a360660da60178f"  # Same namespace, different key prefixes
+
 # Environment variables (non-secret)
 [vars]
 GOOGLE_CLIENT_ID = "35382543229-3t68i7uuplhpbo3mc1besi2r7fjgbc08.apps.googleusercontent.com"

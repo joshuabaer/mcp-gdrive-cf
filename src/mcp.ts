@@ -7,10 +7,18 @@ import { Env } from './bindings';
 import {
   gdriveSearch,
   gdriveReadFile,
+  gdriveCreateFolder,
+  gdriveDeleteFile,
+  gdriveMoveFile,
+  gdriveSearchAdvanced,
+  gdriveUploadFile,
+  gdriveAddPermission,
   gsheetsRead,
   gsheetsUpdateCell,
+  gsheetsAppendRow,
 } from './google';
 import { getUserToken } from './storage';
+import { validateAccessToken } from './oauth-client';
 
 /**
  * MCP tool definitions matching mcp-gdrive functionality
@@ -51,7 +59,11 @@ const MCP_TOOLS = [
         },
         mimeType: {
           type: 'string',
-          description: 'Export MIME type for Google Docs/Sheets/Slides (e.g., text/markdown, text/csv)',
+          description: 'Export MIME type for Google Docs/Sheets/Slides. Supported formats:\n' +
+            '- Google Docs: text/plain, text/markdown, text/html, application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document (DOCX), application/rtf, application/epub+zip\n' +
+            '- Google Sheets: text/csv, text/tab-separated-values, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet (XLSX), application/x-vnd.oasis.opendocument.spreadsheet (ODS)\n' +
+            '- Google Slides: text/plain, application/pdf, application/vnd.openxmlformats-officedocument.presentationml.presentation (PPTX), application/vnd.oasis.opendocument.presentation (ODP)\n' +
+            'Default: text/markdown for Docs, text/csv for Sheets, text/plain for Slides',
         },
       },
       required: ['fileId'],
@@ -96,6 +108,185 @@ const MCP_TOOLS = [
         },
       },
       required: ['spreadsheetId', 'range', 'value'],
+    },
+  },
+  {
+    name: 'gdrive_create_folder',
+    description: 'Create a new folder in Google Drive',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Name of the folder to create',
+        },
+        parentId: {
+          type: 'string',
+          description: 'Optional parent folder ID. If not specified, creates in root',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'gdrive_delete_file',
+    description: 'Delete a file or folder from Google Drive (moves to trash)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileId: {
+          type: 'string',
+          description: 'Google Drive file or folder ID to delete',
+        },
+      },
+      required: ['fileId'],
+    },
+  },
+  {
+    name: 'gdrive_move_file',
+    description: 'Move a file to a different folder in Google Drive',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileId: {
+          type: 'string',
+          description: 'Google Drive file ID to move',
+        },
+        newParentId: {
+          type: 'string',
+          description: 'ID of the destination folder',
+        },
+        oldParentId: {
+          type: 'string',
+          description: 'Optional ID of the current parent folder (for faster operation)',
+        },
+      },
+      required: ['fileId', 'newParentId'],
+    },
+  },
+  {
+    name: 'gdrive_search_advanced',
+    description: 'Advanced search in Google Drive with filters for MIME type, owner, dates, and shared drives',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Optional base search query (e.g., "name contains \'report\'")',
+        },
+        mimeType: {
+          type: 'string',
+          description: 'Filter by MIME type (e.g., "application/pdf", "application/vnd.google-apps.folder")',
+        },
+        owner: {
+          type: 'string',
+          description: 'Filter by owner email address',
+        },
+        modifiedAfter: {
+          type: 'string',
+          description: 'Filter files modified after this date (RFC 3339 format: "2024-01-01T00:00:00Z")',
+        },
+        modifiedBefore: {
+          type: 'string',
+          description: 'Filter files modified before this date (RFC 3339 format: "2024-12-31T23:59:59Z")',
+        },
+        pageSize: {
+          type: 'number',
+          description: 'Number of results per page (max 1000)',
+          default: 100,
+        },
+        pageToken: {
+          type: 'string',
+          description: 'Token for pagination',
+        },
+        supportsAllDrives: {
+          type: 'boolean',
+          description: 'Include files from shared drives',
+          default: false,
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'gdrive_upload_file',
+    description: 'Upload a file to Google Drive (max 5MB, use simple upload)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Name of the file to create',
+        },
+        content: {
+          type: 'string',
+          description: 'File content (text or base64 encoded)',
+        },
+        mimeType: {
+          type: 'string',
+          description: 'MIME type of the file (default: text/plain)',
+          default: 'text/plain',
+        },
+        parentId: {
+          type: 'string',
+          description: 'Optional parent folder ID',
+        },
+      },
+      required: ['name', 'content'],
+    },
+  },
+  {
+    name: 'gdrive_add_permission',
+    description: 'Add sharing permissions to a Google Drive file or folder',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileId: {
+          type: 'string',
+          description: 'Google Drive file or folder ID',
+        },
+        email: {
+          type: 'string',
+          description: 'Email address (required for user/group types)',
+        },
+        role: {
+          type: 'string',
+          description: 'Permission role: "reader", "writer", "commenter", or "owner"',
+          enum: ['reader', 'writer', 'commenter', 'owner'],
+        },
+        type: {
+          type: 'string',
+          description: 'Permission type: "user", "group", "domain", or "anyone"',
+          enum: ['user', 'group', 'domain', 'anyone'],
+        },
+      },
+      required: ['fileId', 'role', 'type'],
+    },
+  },
+  {
+    name: 'gsheets_append_row',
+    description: 'Append one or more rows to a Google Sheet',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        spreadsheetId: {
+          type: 'string',
+          description: 'Google Sheets spreadsheet ID',
+        },
+        range: {
+          type: 'string',
+          description: 'A1 notation range (e.g., "Sheet1!A:A" or "Sheet1")',
+        },
+        values: {
+          type: 'array',
+          items: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+          description: 'Array of rows to append, where each row is an array of cell values',
+        },
+      },
+      required: ['spreadsheetId', 'range', 'values'],
     },
   },
 ];
@@ -272,7 +463,7 @@ async function routeMcpRequest(mcpRequest: any, userId: string, env: Env): Promi
           },
           serverInfo: {
             name: 'mcp-gdrive-cf',
-            version: '0.1.0',
+            version: '0.3.0',
           },
         };
 
@@ -320,12 +511,40 @@ async function handleToolCall(params: any, userId: string, env: Env): Promise<an
         result = await gdriveReadFile(args, userId, env);
         break;
 
+      case 'gdrive_create_folder':
+        result = await gdriveCreateFolder(args, userId, env);
+        break;
+
+      case 'gdrive_delete_file':
+        result = await gdriveDeleteFile(args, userId, env);
+        break;
+
+      case 'gdrive_move_file':
+        result = await gdriveMoveFile(args, userId, env);
+        break;
+
+      case 'gdrive_search_advanced':
+        result = await gdriveSearchAdvanced(args, userId, env);
+        break;
+
+      case 'gdrive_upload_file':
+        result = await gdriveUploadFile(args, userId, env);
+        break;
+
+      case 'gdrive_add_permission':
+        result = await gdriveAddPermission(args, userId, env);
+        break;
+
       case 'gsheets_read':
         result = await gsheetsRead(args, userId, env);
         break;
 
       case 'gsheets_update_cell':
         result = await gsheetsUpdateCell(args, userId, env);
+        break;
+
+      case 'gsheets_append_row':
+        result = await gsheetsAppendRow(args, userId, env);
         break;
 
       default:
@@ -358,7 +577,17 @@ async function handleToolCall(params: any, userId: string, env: Env): Promise<an
  * TODO: Implement proper session management
  */
 async function getUserIdentity(request: Request, env: Env): Promise<string | null> {
-  // For now, use a simple session cookie or query parameter
+  // Check for OAuth Bearer token in Authorization header
+  const authHeader = request.headers.get('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    const userId = await validateAccessToken(token, env);
+    if (userId) {
+      return userId;
+    }
+  }
+
+  // Fallback to session cookie or query parameter
   const url = new URL(request.url);
   const sessionId = url.searchParams.get('session') || getCookie(request, 'session');
 

@@ -11,8 +11,10 @@ const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 // Required scopes for Drive and Sheets
+// Note: Changed from drive.readonly to drive to support write operations
+// (create, delete, move, upload, share)
 const GOOGLE_SCOPES = [
-  'https://www.googleapis.com/auth/drive.readonly',
+  'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/spreadsheets',
 ];
 
@@ -22,6 +24,7 @@ const GOOGLE_SCOPES = [
 export function handleGoogleAuthorize(request: Request, env: Env): Response {
   const url = new URL(request.url);
   const origin = `${url.protocol}//${url.host}`;
+  const pendingAuth = url.searchParams.get('pending_auth');
 
   // Generate state parameter for CSRF protection
   const state = crypto.randomUUID();
@@ -36,14 +39,23 @@ export function handleGoogleAuthorize(request: Request, env: Env): Response {
   authUrl.searchParams.set('prompt', 'consent');
   authUrl.searchParams.set('state', state);
 
+  // Set cookies - need multiple Set-Cookie headers for multiple cookies
+  const headers = new Headers({
+    'Location': authUrl.toString(),
+  });
+  
+  headers.append('Set-Cookie', `oauth_state=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
+  
+  if (pendingAuth) {
+    console.log('Storing pending_auth in cookie:', pendingAuth);
+    headers.append('Set-Cookie', `pending_auth=${pendingAuth}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
+  }
+
   // Set state in cookie for verification
   // Create a new Response with headers instead of modifying immutable redirect
   return new Response(null, {
     status: 302,
-    headers: {
-      'Location': authUrl.toString(),
-      'Set-Cookie': `oauth_state=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
-    },
+    headers,
   });
 }
 
@@ -67,10 +79,20 @@ export async function handleGoogleCallback(request: Request, env: Env): Promise<
 
   // Verify state parameter (CSRF protection)
   const cookies = request.headers.get('Cookie') || '';
+  console.log('Google callback - Cookies received:', cookies);
+  
   const stateCookie = cookies
     .split(';')
     .find((c) => c.trim().startsWith('oauth_state='))
     ?.split('=')[1];
+    
+  const pendingAuthCookie = cookies
+    .split(';')
+    .find((c) => c.trim().startsWith('pending_auth='))
+    ?.split('=')[1];
+
+  console.log('Google callback - State cookie:', stateCookie);
+  console.log('Google callback - Pending auth cookie:', pendingAuthCookie);
 
   if (state !== stateCookie) {
     return new Response('Invalid state parameter', { status: 400 });
@@ -86,6 +108,58 @@ export async function handleGoogleCallback(request: Request, env: Env): Promise<
 
   // Store tokens in KV
   await updateUserToken(userId, { google: tokenData }, env);
+
+  // Check if this is part of an OAuth client flow
+  if (pendingAuthCookie) {
+    console.log('Found pending auth cookie, looking up:', pendingAuthCookie);
+    const pendingAuthData = await env.KV_CLIENTS.get(`pending_auth:${pendingAuthCookie}`);
+    console.log('Pending auth data from KV:', pendingAuthData ? 'Found' : 'Not found');
+    
+    if (pendingAuthData) {
+      const pendingAuth = JSON.parse(pendingAuthData);
+      console.log('Pending auth details:', { 
+        client_id: pendingAuth.client_id, 
+        redirect_uri: pendingAuth.redirect_uri 
+      });
+      
+      // Generate authorization code
+      const authCode = crypto.randomUUID();
+      const authCodeData = {
+        code: authCode,
+        client_id: pendingAuth.client_id,
+        user_id: userId,
+        redirect_uri: pendingAuth.redirect_uri,
+        code_challenge: pendingAuth.code_challenge,
+        code_challenge_method: pendingAuth.code_challenge_method,
+        scopes: ['mcp'],
+        expires_at: Date.now() + 10 * 60 * 1000, // 10 minutes
+      };
+      
+      await env.KV_CLIENTS.put(
+        `authcode:${authCode}`,
+        JSON.stringify(authCodeData),
+        { expirationTtl: 10 * 60 }
+      );
+      
+      // Clean up pending auth
+      await env.KV_CLIENTS.delete(`pending_auth:${pendingAuthCookie}`);
+      
+      // Redirect back to OAuth client with authorization code
+      const redirectUrl = new URL(pendingAuth.redirect_uri);
+      redirectUrl.searchParams.set('code', authCode);
+      if (pendingAuth.state) {
+        redirectUrl.searchParams.set('state', pendingAuth.state);
+      }
+      
+      return new Response(null, {
+        status: 302,
+        headers: {
+          'Location': redirectUrl.toString(),
+          'Set-Cookie': `session=${userId}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`, // 30 days
+        },
+      });
+    }
+  }
 
   // Set session cookie
   const response = new Response(

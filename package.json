@@ -1,7 +1,7 @@
 {
   "name": "mcp-gdrive-cf",
-  "version": "0.1.0",
-  "description": "Remote MCP server for Google Drive and Sheets on Cloudflare Workers",
+  "version": "0.4.0-alpha.1",
+  "description": "Remote MCP server for Google Drive and Sheets on Cloudflare Workers with OAuth 2.0 authorization server",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
