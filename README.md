@@ -195,6 +195,9 @@ npx @modelcontextprotocol/inspector https://your-worker.workers.dev/sse
 - \`gdrive_delete_file\` - Move files to trash
 - \`gdrive_move_file\` - Move files between folders
 - \`gdrive_add_permission\` - Share files/folders
+- \`gdrive_list_comments\` - List comments with author, quoted text, and threaded replies
+- \`gdrive_list_revisions\` - List revision history with editors and timestamps
+- \`gdrive_get_revision\` - Fetch metadata or exported content for a specific revision
 
 ### Sheets Tools
 

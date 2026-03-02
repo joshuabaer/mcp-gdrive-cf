@@ -1,6 +1,16 @@
 /**
  * MCP Server implementation
  * Handles tool registration and request routing via SSE
+ *
+ * Uses the MCP SSE transport protocol:
+ *   1. Client GETs /sse → receives `event: endpoint` with message URL
+ *   2. Client POSTs JSON-RPC to message URL
+ *   3. Server relays responses back via SSE `event: message`
+ *
+ * A global Map correlates session IDs to SSE stream writers so POST
+ * handlers (separate fetch invocations) can push responses to the
+ * correct SSE stream. This works reliably on Cloudflare Workers when
+ * requests hit the same isolate, which is typical for a single client.
  */
 
 import { Env } from './bindings';
@@ -16,9 +26,18 @@ import {
   gsheetsRead,
   gsheetsUpdateCell,
   gsheetsAppendRow,
+  gdriveListComments,
+  gdriveListRevisions,
+  gdriveGetRevision,
 } from './google';
 import { getUserToken } from './storage';
 import { validateAccessToken } from './oauth-client';
+
+/**
+ * Global map: sessionId → SSE stream writer.
+ * Populated on GET /sse, consumed on POST /message.
+ */
+const sseWriters = new Map<string, { writer: WritableStreamDefaultWriter; encoder: TextEncoder }>();
 
 /**
  * MCP tool definitions matching mcp-gdrive functionality
@@ -289,10 +308,101 @@ const MCP_TOOLS = [
       required: ['spreadsheetId', 'range', 'values'],
     },
   },
+  {
+    name: 'gdrive_list_comments',
+    description: 'List comments on a Google Drive file (Docs, Sheets, Slides). Returns comment text, author, timestamps, quoted document text, and threaded replies.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileId: {
+          type: 'string',
+          description: 'Google Drive file ID',
+        },
+        includeResolved: {
+          type: 'boolean',
+          description: 'Include resolved comments (default: true)',
+          default: true,
+        },
+        pageSize: {
+          type: 'number',
+          description: 'Number of comments per page (max 100)',
+          default: 100,
+        },
+        pageToken: {
+          type: 'string',
+          description: 'Token for pagination',
+        },
+      },
+      required: ['fileId'],
+    },
+  },
+  {
+    name: 'gdrive_list_revisions',
+    description: 'List revision history of a Google Drive file. Returns who edited the file and when.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileId: {
+          type: 'string',
+          description: 'Google Drive file ID',
+        },
+        pageSize: {
+          type: 'number',
+          description: 'Number of revisions per page (max 200)',
+          default: 200,
+        },
+        pageToken: {
+          type: 'string',
+          description: 'Token for pagination',
+        },
+      },
+      required: ['fileId'],
+    },
+  },
+  {
+    name: 'gdrive_get_revision',
+    description: 'Get a specific revision of a Google Drive file. Can export the content of past revisions for Google Docs/Sheets/Slides.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileId: {
+          type: 'string',
+          description: 'Google Drive file ID',
+        },
+        revisionId: {
+          type: 'string',
+          description: 'Revision ID (from gdrive_list_revisions)',
+        },
+        exportMimeType: {
+          type: 'string',
+          description: 'MIME type to export revision content as (e.g., "text/plain", "text/markdown"). Omit to get metadata only.',
+        },
+      },
+      required: ['fileId', 'revisionId'],
+    },
+  },
 ];
 
 /**
- * Handle MCP SSE request
+ * Send a JSON-RPC response through the SSE stream for the given session.
+ * Returns true if delivered, false if no writer was found.
+ */
+async function sendSseMessage(sessionId: string, jsonrpcResponse: any): Promise<boolean> {
+  const entry = sseWriters.get(sessionId);
+  if (!entry) return false;
+  try {
+    const payload = `event: message\ndata: ${JSON.stringify(jsonrpcResponse)}\n\n`;
+    await entry.writer.write(entry.encoder.encode(payload));
+    return true;
+  } catch {
+    // Writer closed — clean up
+    sseWriters.delete(sessionId);
+    return false;
+  }
+}
+
+/**
+ * Handle MCP SSE request (legacy transport)
  */
 export async function handleMcpRequest(
   request: Request,
@@ -307,7 +417,7 @@ export async function handleMcpRequest(
     return handleSseConnection(userId, env, ctx);
   }
 
-  // For POST requests (messages), handle them directly
+  // For POST requests (messages), process and relay response via SSE
   if (request.method === 'POST') {
     let mcpRequest: any;
 
@@ -324,115 +434,220 @@ export async function handleMcpRequest(
     }
 
     const method: string | undefined = mcpRequest?.method;
-  
-    // Allow initialize even if the client has not authenticated yet so the handshake can complete
+
+    // Resolve the session ID used for this POST (matches the one in the endpoint URL)
+    const url = new URL(request.url);
+    const sessionId = url.searchParams.get('sessionId')
+      || url.searchParams.get('session')
+      || userId;
+
+    // initialize + notifications/initialized are allowed without auth
     if (method === 'initialize') {
-      const result = await routeMcpRequest(mcpRequest, userId || 'anonymous', env);
-      const response = {
-        jsonrpc: '2.0',
-        id: mcpRequest.id,
-        result,
-      };
-      return new Response(JSON.stringify(response), {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      const result = await routeMcpRequest(mcpRequest, sessionId || 'anonymous', env);
+      const jsonrpcResponse = { jsonrpc: '2.0', id: mcpRequest.id, result };
+      if (sessionId) await sendSseMessage(sessionId, jsonrpcResponse);
+      return new Response('Accepted', { status: 202 });
     }
 
-    // tools/list can run without OAuth, but we still require a session so we can correlate later calls
-    if (!userId) {
+    if (method === 'notifications/initialized') {
+      // Client acknowledgment — no response needed
+      return new Response('Accepted', { status: 202 });
+    }
+
+    // All remaining methods require a session
+    if (!sessionId) {
       return new Response(
         JSON.stringify({
           error: 'Unauthorized',
-          message: 'Missing session identifier. Add ?session=YOUR_SESSION_ID or set a session cookie.',
+          message: 'Missing session identifier. Connect via /sse first.',
         }),
         { status: 401, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
+    // tools/list works without Google OAuth
     if (method === 'tools/list') {
-      const result = await routeMcpRequest(mcpRequest, userId, env);
-      const response = {
+      const result = await routeMcpRequest(mcpRequest, sessionId, env);
+      const jsonrpcResponse = { jsonrpc: '2.0', id: mcpRequest.id, result };
+      await sendSseMessage(sessionId, jsonrpcResponse);
+      return new Response('Accepted', { status: 202 });
+    }
+
+    // All other methods (tools/call, etc.) require Google OAuth token
+    const tokenData = await getUserToken(sessionId, env);
+    if (!tokenData?.google) {
+      const errorResponse = {
         jsonrpc: '2.0',
         id: mcpRequest.id,
-        result,
+        error: {
+          code: -32001,
+          message: 'Not authenticated with Google. Visit /google/authorize to connect your account.',
+        },
       };
-      return new Response(JSON.stringify(response), {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      await sendSseMessage(sessionId, errorResponse);
+      return new Response('Accepted', { status: 202 });
     }
 
-    // All other methods require Google OAuth token
-    const tokenData = await getUserToken(userId, env);
-    if (!tokenData?.google) {
-      return new Response(
-        JSON.stringify({
-          error: 'Not authenticated with Google',
-          message: 'Please visit /google/authorize to authenticate your session.',
-        }),
-        { status: 401, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const result = await routeMcpRequest(mcpRequest, userId, env);
-    const response = {
-      jsonrpc: '2.0',
-      id: mcpRequest.id,
-      result,
-    };
-
-    return new Response(JSON.stringify(response), {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    const result = await routeMcpRequest(mcpRequest, sessionId, env);
+    const jsonrpcResponse = { jsonrpc: '2.0', id: mcpRequest.id, result };
+    await sendSseMessage(sessionId, jsonrpcResponse);
+    return new Response('Accepted', { status: 202 });
   }
 
   return new Response('Method not allowed', { status: 405 });
 }
 
+// ─── Streamable HTTP transport ───────────────────────────────────────────────
+// MCP 2025-03-26 spec: POST JSON-RPC → JSON-RPC response in body.
+// No separate SSE connection needed — eliminates cross-isolate Map issues.
+
+const STREAMABLE_HEADERS = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+};
+
 /**
- * Handle SSE connection for MCP protocol
+ * Handle MCP Streamable HTTP transport.
+ * Client POSTs JSON-RPC, server responds with JSON-RPC in the body.
+ * Session tracked via Mcp-Session-Id header.
+ */
+export async function handleStreamableHttp(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  if (request.method === 'GET') {
+    // GET is used by the client to open an SSE stream for server-initiated messages.
+    // We don't need server-initiated messages, so just return the server info.
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      result: {
+        protocolVersion: '2025-03-26',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'mcp-gdrive-cf', version: '0.4.0' },
+      },
+    }), { headers: STREAMABLE_HEADERS });
+  }
+
+  if (request.method === 'DELETE') {
+    // Session termination — acknowledge it
+    return new Response(null, { status: 204 });
+  }
+
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: STREAMABLE_HEADERS });
+  }
+
+  // Parse the JSON-RPC request
+  let mcpRequest: any;
+  try {
+    mcpRequest = await request.json();
+  } catch {
+    return jsonRpcError(null, -32700, 'Parse error');
+  }
+
+  const method: string | undefined = mcpRequest?.method;
+
+  // Resolve session: Mcp-Session-Id header > query param > cookie
+  const sessionId = request.headers.get('mcp-session-id')
+    || new URL(request.url).searchParams.get('session')
+    || await getUserIdentity(request, env);
+
+  // ── initialize ──
+  if (method === 'initialize') {
+    const newSessionId = sessionId || crypto.randomUUID();
+    const result = await routeMcpRequest(mcpRequest, newSessionId, env);
+    return new Response(
+      JSON.stringify({ jsonrpc: '2.0', id: mcpRequest.id, result }),
+      { status: 200, headers: { ...STREAMABLE_HEADERS, 'Mcp-Session-Id': newSessionId } },
+    );
+  }
+
+  // ── notifications (no response body) ──
+  if (method === 'notifications/initialized' || method?.startsWith('notifications/')) {
+    return new Response(null, { status: 204 });
+  }
+
+  // ── All remaining methods require a session ──
+  if (!sessionId) {
+    return jsonRpcError(mcpRequest?.id, -32001, 'Missing session. Send initialize first.');
+  }
+
+  // tools/list doesn't need Google OAuth
+  if (method === 'tools/list') {
+    const result = await routeMcpRequest(mcpRequest, sessionId, env);
+    return new Response(
+      JSON.stringify({ jsonrpc: '2.0', id: mcpRequest.id, result }),
+      { status: 200, headers: { ...STREAMABLE_HEADERS, 'Mcp-Session-Id': sessionId } },
+    );
+  }
+
+  // All other methods (tools/call, etc.) require Google OAuth token
+  const tokenData = await getUserToken(sessionId, env);
+  if (!tokenData?.google) {
+    return jsonRpcError(
+      mcpRequest?.id, -32001,
+      'Not authenticated with Google. Visit /google/authorize to connect your account.',
+    );
+  }
+
+  const result = await routeMcpRequest(mcpRequest, sessionId, env);
+  return new Response(
+    JSON.stringify({ jsonrpc: '2.0', id: mcpRequest.id, result }),
+    { status: 200, headers: { ...STREAMABLE_HEADERS, 'Mcp-Session-Id': sessionId } },
+  );
+}
+
+function jsonRpcError(id: any, code: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ jsonrpc: '2.0', id: id ?? null, error: { code, message } }),
+    { status: 200, headers: STREAMABLE_HEADERS },
+  );
+}
+
+/**
+ * Handle SSE connection for MCP protocol.
+ *
+ * Follows the MCP SSE transport spec:
+ *   event: endpoint
+ *   data: /message?sessionId=<uuid>
+ *
+ * The client POSTs JSON-RPC to that URL; responses are pushed back
+ * as `event: message` frames on this SSE stream.
  */
 async function handleSseConnection(
   userId: string | null,
   env: Env,
   ctx: ExecutionContext
 ): Promise<Response> {
-  // Create a TransformStream for SSE
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
 
-  // Send SSE messages
-  const sendEvent = async (data: any) => {
-    const message = `data: ${JSON.stringify(data)}\n\n`;
-    await writer.write(encoder.encode(message));
-  };
+  // Each SSE connection gets a unique session ID
+  const sessionId = userId || crypto.randomUUID();
 
-  // Handle the SSE connection asynchronously
+  // Register the writer so POST handlers can push responses
+  sseWriters.set(sessionId, { writer, encoder });
+
   ctx.waitUntil(
     (async () => {
       try {
-        // Send endpoint message
-        await sendEvent({
-          jsonrpc: '2.0',
-          method: 'endpoint',
-          params: {
-            endpoint: '/message',
-          },
-        });
+        // Send the message endpoint URL using the MCP SSE event format
+        const endpointUrl = `/message?sessionId=${sessionId}`;
+        await writer.write(encoder.encode(`event: endpoint\ndata: ${endpointUrl}\n\n`));
 
-        // Keep connection alive
+        // Keep connection alive with SSE comments
         const keepAlive = setInterval(async () => {
           try {
             await writer.write(encoder.encode(': keepalive\n\n'));
-          } catch (error) {
+          } catch {
             clearInterval(keepAlive);
+            sseWriters.delete(sessionId);
           }
         }, 30000);
-
-        // Note: In a real implementation, you'd wait for the client to close the connection
-        // For now, we'll keep it open indefinitely
       } catch (error) {
         console.error('SSE error:', error);
+        sseWriters.delete(sessionId);
       }
     })()
   );
@@ -547,6 +762,18 @@ async function handleToolCall(params: any, userId: string, env: Env): Promise<an
         result = await gsheetsAppendRow(args, userId, env);
         break;
 
+      case 'gdrive_list_comments':
+        result = await gdriveListComments(args, userId, env);
+        break;
+
+      case 'gdrive_list_revisions':
+        result = await gdriveListRevisions(args, userId, env);
+        break;
+
+      case 'gdrive_get_revision':
+        result = await gdriveGetRevision(args, userId, env);
+        break;
+
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -587,9 +814,11 @@ async function getUserIdentity(request: Request, env: Env): Promise<string | nul
     }
   }
 
-  // Fallback to session cookie or query parameter
+  // Fallback to session cookie or query parameter (accept both 'sessionId' and 'session')
   const url = new URL(request.url);
-  const sessionId = url.searchParams.get('session') || getCookie(request, 'session');
+  const sessionId = url.searchParams.get('sessionId')
+    || url.searchParams.get('session')
+    || getCookie(request, 'session');
 
   if (!sessionId) {
     return null;

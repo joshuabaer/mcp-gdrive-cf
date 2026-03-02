@@ -602,8 +602,12 @@ export async function gdriveAddPermission(
     permission.emailAddress = email;
   }
 
+  const url = role === 'owner'
+    ? `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?transferOwnership=true`
+    : `https://www.googleapis.com/drive/v3/files/${fileId}/permissions`;
+
   const response = await googleApiRequest(
-    `https://www.googleapis.com/drive/v3/files/${fileId}/permissions`,
+    url,
     userId,
     env,
     {
@@ -722,6 +726,157 @@ function getFormatFriendlyName(mimeType: string): string {
   };
   
   return formatNames[mimeType] || mimeType;
+}
+
+/**
+ * List comments on a Google Drive file (Docs, Sheets, Slides, etc.)
+ */
+export async function gdriveListComments(
+  args: { fileId: string; includeResolved?: boolean; pageSize?: number; pageToken?: string },
+  userId: string,
+  env: Env
+): Promise<any> {
+  const { fileId, includeResolved = true, pageSize = 100, pageToken } = args;
+
+  const params = new URLSearchParams({
+    fields: 'nextPageToken,comments(id,content,author(displayName,emailAddress),createdTime,modifiedTime,resolved,quotedFileContent,replies(id,content,author(displayName,emailAddress),createdTime))',
+    pageSize: pageSize.toString(),
+    includeDeleted: 'false',
+  });
+
+  if (pageToken) {
+    params.append('pageToken', pageToken);
+  }
+
+  const response = await googleApiRequest(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/comments?${params}`,
+    userId,
+    env
+  );
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`Drive Comments API error: ${response.status} ${errorData}`);
+  }
+
+  const data = await response.json() as any;
+  let comments = data.comments || [];
+
+  if (!includeResolved) {
+    comments = comments.filter((c: any) => !c.resolved);
+  }
+
+  return {
+    fileId,
+    comments,
+    nextPageToken: data.nextPageToken,
+  };
+}
+
+/**
+ * List revisions of a Google Drive file
+ */
+export async function gdriveListRevisions(
+  args: { fileId: string; pageSize?: number; pageToken?: string },
+  userId: string,
+  env: Env
+): Promise<any> {
+  const { fileId, pageSize = 200, pageToken } = args;
+
+  const params = new URLSearchParams({
+    fields: 'nextPageToken,revisions(id,modifiedTime,lastModifyingUser(displayName,emailAddress),size)',
+    pageSize: pageSize.toString(),
+  });
+
+  if (pageToken) {
+    params.append('pageToken', pageToken);
+  }
+
+  const response = await googleApiRequest(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/revisions?${params}`,
+    userId,
+    env
+  );
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`Drive Revisions API error: ${response.status} ${errorData}`);
+  }
+
+  const data = await response.json() as any;
+  return {
+    fileId,
+    revisions: data.revisions || [],
+    nextPageToken: data.nextPageToken,
+  };
+}
+
+/**
+ * Get a specific revision of a Google Drive file, optionally exporting its content
+ */
+export async function gdriveGetRevision(
+  args: { fileId: string; revisionId: string; exportMimeType?: string },
+  userId: string,
+  env: Env
+): Promise<any> {
+  const { fileId, revisionId, exportMimeType } = args;
+
+  // Get revision metadata (including exportLinks for Workspace files)
+  const response = await googleApiRequest(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revisionId}?fields=*`,
+    userId,
+    env
+  );
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`Drive Revisions API error: ${response.status} ${errorData}`);
+  }
+
+  const revision = await response.json() as any;
+
+  // "raw" means "download the revision via alt=media" — used for binary files
+  // and Workspace files where the caller wants the native Google blob rather
+  // than an exported format. Check this BEFORE the exportLinks branch, since
+  // Workspace revisions have exportLinks but never carry a "raw" key in them.
+  if (exportMimeType === 'raw') {
+    const downloadResponse = await googleApiRequest(
+      `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revisionId}?alt=media`,
+      userId,
+      env
+    );
+    if (!downloadResponse.ok) {
+      const errorData = await downloadResponse.text();
+      throw new Error(`Revision download error: ${downloadResponse.status} ${errorData}`);
+    }
+    const content = await downloadResponse.text();
+    return { fileId, revisionId, content };
+  }
+
+  // If an export format was requested and the revision is a Workspace file
+  // with exportLinks, use the export URL for that MIME type.
+  if (exportMimeType && revision.exportLinks) {
+    const exportUrl = revision.exportLinks[exportMimeType];
+    if (!exportUrl) {
+      return {
+        fileId,
+        revisionId,
+        revision,
+        error: `Export format "${exportMimeType}" not available. Available: ${Object.keys(revision.exportLinks).join(', ')}`,
+      };
+    }
+
+    const contentResponse = await googleApiRequest(exportUrl, userId, env);
+    if (!contentResponse.ok) {
+      const errorData = await contentResponse.text();
+      throw new Error(`Revision export error: ${contentResponse.status} ${errorData}`);
+    }
+
+    const content = await contentResponse.text();
+    return { fileId, revisionId, content };
+  }
+
+  return { fileId, revisionId, revision };
 }
 
 // TODO: Future enhancement - gsheets_batch_update
